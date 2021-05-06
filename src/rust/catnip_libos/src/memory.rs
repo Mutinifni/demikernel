@@ -123,14 +123,44 @@ impl MemoryManager {
         }
 
         let ptr_int = ptr as usize;
-        let ptr_offset = ptr_int - self.inner.body_region_addr;
-        let offset_within_alloc = ptr_offset % self.inner.body_alloc_size();
 
-        if offset_within_alloc < (64 + 128) {
-            anyhow::bail!("Data pointer within allocation header: {:?} in {:?}", ptr, self.inner);
+        const PGSHIFT_2MB: usize = 12;
+        const PGSIZE_2MB: usize = 1 << PGSIZE_2MB;
+        const PGMASK_2MB: usize = PGSIZE_2MB - 1;
+        let prev_2mb_pg = ptr_int - (ptr_int & PGMASK_2MB);
+
+        pub const MEMHDR_OFFSET: usize = 24; // offset to first mbuf from the beginning of the mempool
+        pub const MEMHDR_ALIGNED_OFFSET: usize = 64; // offset to first mbuf on a new page
+
+        let base_mbuf = match prev_2mb_pg <= self.inner.body_region_addr {
+            true => self.inner.body_region_addr + MEMHDR_OFFSET,
+            false => prev_2mb_pg + MEMHDR_ALIGNED_OFFSET,
+        };
+
+
+        const RTE_PKTMBUF_TAILROOM: u32 = 120; // with priv size of 8, this is padding
+        const MBUF_POOL_HDR_SIZE: usize = 64;
+        const MBUF_PRIV_SIZE: usize = 8;
+        const MBUF_MEMPOOL_PADDING: usize = 128;
+        let mbuf_buf_size = self.inner.config.max_body_size;
+        let total_mempool_mbuf_size = MBUF_POOL_HDR_SIZE
+            + mbuf_buf_size
+            + MBUF_PRIV_SIZE
+            + RTE_PKTMBUF_TAILROOM as usize
+            + MBUF_MEMPOOL_PADDING;
+
+        assert!(base_mbuf <= ptr_int, "{} > {}", base_mbuf, ptr_int);
+        let ptr_offset = ptr_int - base_mbuf;
+        let offset_within_alloc = ptr_offset % total_mempool_mbuf_size;
+
+        if offset_within_alloc < (MBUF_POOL_HDR_SIZE + RTE_PKTMBUF_TAILROOM as usize + MBUF_PRIV_SIZE) {
+            anyhow::bail!("Data pointer within allocation header: {}", offset_within_alloc);
+        }
+        if offset_within_alloc > (MBUF_POOL_HDR_SIZE + mbuf_buf_size + MBUF_PRIV_SIZE) {
+            anyhow::bail!("Data pointer within allocation tailroom: {}", offset_within_alloc);
         }
 
-        let mbuf_ptr = (ptr_int - offset_within_alloc + 64) as *mut rte_mbuf;
+        let mbuf_ptr = (ptr_int - offset_within_alloc) as *mut rte_mbuf;
         Ok(mbuf_ptr)
     }
 
