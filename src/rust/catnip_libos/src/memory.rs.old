@@ -18,7 +18,7 @@ use dpdk_rs::{
     rte_mempool_mem_iter,
     rte_pktmbuf_headroom,
     rte_pktmbuf_tailroom,
-    rte_pktmbuf_pool_create_by_ops,
+    rte_mempool_obj_iter,
 };
 use catnip::protocols::tcp::segment::MAX_TCP_HEADER_SIZE;
 use catnip::protocols::ipv4::datagram::IPV4_HEADER_SIZE;
@@ -69,7 +69,6 @@ impl Default for MemoryConfig {
             max_body_size: 2176,
             body_pool_size: 8192,
             cache_size: 128,
-            //cache_size: 512,
         }
     }
 }
@@ -125,15 +124,46 @@ impl MemoryManager {
         }
 
         let ptr_int = ptr as usize;
-        let ptr_offset = ptr_int - self.inner.body_region_addr;
-        let offset_within_alloc = ptr_offset % self.inner.body_alloc_size();
 
-        if offset_within_alloc < (64 + 128) {
-            anyhow::bail!("Data pointer within allocation header: {:?} in {:?}", ptr, self.inner);
+        const PGSHIFT_2MB: usize = 21;
+        const PGSIZE_2MB: usize = 1 << PGSHIFT_2MB;
+        const PGMASK_2MB: usize = PGSIZE_2MB - 1;
+        let prev_2mb_pg = ptr_int - (ptr_int & PGMASK_2MB);
+
+        pub const MEMHDR_OFFSET: usize = 64; // offset to first mbuf from the beginning of the mempool
+        pub const MEMHDR_ALIGNED_OFFSET: usize = 64; // offset to first mbuf on a new page
+
+        let base_mbuf = match prev_2mb_pg <= self.inner.body_region_addr {
+            true => self.inner.body_region_addr + MEMHDR_OFFSET,
+            false => prev_2mb_pg + MEMHDR_ALIGNED_OFFSET,
+        };
+
+
+        const RTE_PKTMBUF_TAILROOM: u32 = 0; // with priv size of 8, this is padding 
+        const MBUF_POOL_HDR_SIZE: usize = 64;
+        const MBUF_PRIV_SIZE: usize = 0;
+        const MBUF_MEMPOOL_PADDING: usize = 0;
+        let mbuf_buf_size = self.inner.config.max_body_size;
+        let total_mempool_mbuf_size = MBUF_POOL_HDR_SIZE
+            + mbuf_buf_size
+            + MBUF_PRIV_SIZE
+            + RTE_PKTMBUF_TAILROOM as usize
+            + MBUF_MEMPOOL_PADDING;
+
+        assert!(base_mbuf <= ptr_int, "{} > {}", base_mbuf, ptr_int);
+        let ptr_offset = ptr_int - base_mbuf;
+        let offset_within_alloc = ptr_offset % total_mempool_mbuf_size;
+
+        if offset_within_alloc < (MBUF_POOL_HDR_SIZE + RTE_PKTMBUF_TAILROOM as usize + MBUF_PRIV_SIZE) {
+            anyhow::bail!("Data pointer within allocation header: {}", offset_within_alloc);
+        }
+        if offset_within_alloc > (MBUF_POOL_HDR_SIZE + mbuf_buf_size + MBUF_PRIV_SIZE) {
+            anyhow::bail!("Data pointer within allocation tailroom: {}", offset_within_alloc);
         }
 
-        let mbuf_ptr = (ptr_int - offset_within_alloc + 64) as *mut rte_mbuf;
-        Ok(mbuf_ptr)
+        let mbuf_ptr = (ptr_int - offset_within_alloc) as *mut rte_mbuf;
+        println!("mbuf_ptr: {:?}, mbuf_ptr-64: {:?}", mbuf_ptr, (mbuf_ptr as usize - 64) as *const u8);
+        Ok((mbuf_ptr as usize - 64) as *mut rte_mbuf)
     }
 
     fn is_body_ptr(&self, ptr: *mut c_void) -> bool {
@@ -302,26 +332,16 @@ impl Inner {
         let header_mbuf_size = header_size + config.inline_body_size;
         let priv_size = 0;
         assert_eq!(priv_size, 0, "Private data isn't supported (it adds another region between `rte_mbuf` and data)");
-        let lfstack = CString::new("lf_stack")?;
         let header_pool = unsafe {
             let name = CString::new("header_pool")?;
-            rte_pktmbuf_pool_create_by_ops(
+            rte_pktmbuf_pool_create(
                 name.as_ptr(),
                 config.header_pool_size as u32,
                 config.cache_size as u32,
-                0,
+                priv_size,
                 header_mbuf_size as u16,
-                0,
-                lfstack.as_ptr()
+                rte_socket_id() as i32,
             )
-            //rte_pktmbuf_pool_create(
-            //    name.as_ptr(),
-            //    config.header_pool_size as u32,
-            //    config.cache_size as u32,
-            //    priv_size,
-            //    header_mbuf_size as u16,
-            //    rte_socket_id() as i32,
-            //)
         };
         if header_pool.is_null() {
             let reason = unsafe {
@@ -332,25 +352,16 @@ impl Inner {
 
         let indirect_pool = unsafe {
             let name = CString::new("indirect_pool")?;
-            rte_pktmbuf_pool_create_by_ops(
+            rte_pktmbuf_pool_create(
                 name.as_ptr(),
                 config.indirect_pool_size as u32,
                 config.cache_size as u32,
                 priv_size,
+                // These mbufs have no body -- they're just for indirect mbufs to point to
+                // allocations from the body pool.
                 0,
                 rte_socket_id() as i32,
-                lfstack.as_ptr()
             )
-            //rte_pktmbuf_pool_create(
-            //    name.as_ptr(),
-            //    config.indirect_pool_size as u32,
-            //    config.cache_size as u32,
-            //    priv_size,
-            //    // These mbufs have no body -- they're just for indirect mbufs to point to
-            //    // allocations from the body pool.
-            //    0,
-            //    rte_socket_id() as i32,
-            //)
         };
         if indirect_pool.is_null() {
             anyhow::bail!("Failed to create indirect pool");
@@ -358,29 +369,65 @@ impl Inner {
 
         let body_pool = unsafe {
             let name = CString::new("body_pool")?;
-            rte_pktmbuf_pool_create_by_ops(
+            rte_pktmbuf_pool_create(
                 name.as_ptr(),
                 config.body_pool_size as u32,
                 config.cache_size as u32,
                 priv_size,
                 config.max_body_size as u16,
                 rte_socket_id() as i32,
-                lfstack.as_ptr()
             )
-            //rte_pktmbuf_pool_create(
-            //    name.as_ptr(),
-            //    config.body_pool_size as u32,
-            //    config.cache_size as u32,
-            //    priv_size,
-            //    config.max_body_size as u16,
-            //    rte_socket_id() as i32,
-            //)
         };
         if body_pool.is_null() {
             anyhow::bail!("Failed to create body pool");
         }
 
-        let mut memory_regions: Vec<(usize, usize)> = vec![];
+	let mut op: Vec<usize> = vec![];
+	unsafe extern "C" fn check_each_mbuf(
+	    mp: *mut rte_mempool,
+	    mut opaque: *mut ::std::os::raw::c_void,
+	    m: *mut ::std::os::raw::c_void,
+	    idx: u32,
+	) {
+	    let mbuf = m as *mut rte_mbuf;
+	    let mr = unsafe { &mut *(opaque as *mut Vec<usize>) };
+	    let op = match idx > 0 {
+		true => {
+		    let len = mr.len();
+		    mr[len - 1]
+		}
+		false => 0,
+	    };
+	    if idx != 0 && (mbuf as usize - op) != 16448 {
+		println!(
+		    "NOT THE SAME DIF: idx: {}, mbuf addr: {:?} ({:?}), opaque (last): {:?}, dif: {:?}",
+		    idx,
+		    mbuf as usize,
+		    mbuf,
+		    op,
+		    (mbuf as usize - op)
+		);
+	    }
+	    if idx < 10 || idx > 8180 || idx == 65 {
+		println!(
+		    "idx: {}, mbuf addr: {:?} ({:?}), opaque (last): {:?}, dif: {:?}",
+		    idx,
+		    mbuf as usize,
+		    mbuf,
+		    op,
+		    (mbuf as usize - op)
+		);
+	    }
+	    mr.push(mbuf as usize);
+	}
+	unsafe { rte_mempool_obj_iter(
+		body_pool,
+		Some(check_each_mbuf),
+		&mut op as *mut _ as *mut ::std::os::raw::c_void
+	    );
+        }
+
+	let mut memory_regions: Vec<(usize, usize)> = vec![];
 
         extern "C" fn mem_cb(mp: *mut rte_mempool, opaque: *mut c_void, memhdr: *mut rte_mempool_memhdr, mem_idx: c_uint) {
             let mut mr = unsafe { &mut *(opaque as *mut Vec<(usize, usize)>) };
@@ -398,6 +445,10 @@ impl Inner {
 
         let (base_addr, base_len) = memory_regions[0];
         let mut cur_addr = base_addr + base_len;
+
+        for &(addr, len) in &memory_regions[0..] {
+            println!("memory region: addr: {:?}, len: {}", addr, len);
+        }
 
         for &(addr, len) in &memory_regions[1..] {
             if addr != cur_addr {
@@ -418,6 +469,8 @@ impl Inner {
         assert_eq!(sz.header_size, 64);
         assert_eq!(sz.elt_size as usize, 128 + config.max_body_size);
         assert_eq!(sz.trailer_size, 0);
+
+        println!("size struct: {:?}", sz);
 
         Ok(Self {
             config,

@@ -22,7 +22,7 @@ use libc::c_int;
 use std::{
     time::Instant,
 };
-use tracy_client::static_span;
+//use tracy_client::static_span;
 
 const TIMER_RESOLUTION: usize = 64;
 const MAX_RECV_ITERS: usize = 2;
@@ -96,7 +96,7 @@ impl<RT: Runtime> LibOS<RT> {
     }
 
     pub fn push(&mut self, fd: FileDescriptor, sga: &dmtr_sgarray_t) -> QToken {
-        let _s = static_span!();
+        //let _s = static_span!();
         let buf = self.rt.clone_sgarray(sga);
         let future = self.engine.push(fd, buf);
         self.rt.scheduler().insert(future).into_raw()
@@ -108,7 +108,7 @@ impl<RT: Runtime> LibOS<RT> {
     }
 
     pub fn pushto(&mut self, fd: FileDescriptor, sga: &dmtr_sgarray_t, to: Endpoint) -> QToken {
-        let _s = static_span!();
+        //let _s = static_span!();
         let buf = self.rt.clone_sgarray(sga);
         let future = self.engine.pushto(fd, buf, to);
         self.rt.scheduler().insert(future).into_raw()
@@ -124,7 +124,7 @@ impl<RT: Runtime> LibOS<RT> {
     }
 
     pub fn pop(&mut self, fd: FileDescriptor) -> QToken {
-        let _s = static_span!();
+        //let _s = static_span!();
         let future = self.engine.pop(fd);
         self.rt.scheduler().insert(future).into_raw()
     }
@@ -172,7 +172,7 @@ impl<RT: Runtime> LibOS<RT> {
     }
 
     pub fn wait_any(&mut self, qts: &[QToken]) -> (usize, dmtr_qresult_t) {
-        let _s = static_span!();
+        //let _s = static_span!();
         loop {
             self.poll_bg_work();
             for (i, &qt) in qts.iter().enumerate() {
@@ -186,16 +186,33 @@ impl<RT: Runtime> LibOS<RT> {
         }
     }
 
-    pub fn wait_any2(&mut self, qts: &[QToken]) -> (usize, FileDescriptor, OperationResult<RT>) {
+    //pub fn wait_any2(&mut self, qts: &[QToken]) -> (usize, FileDescriptor, OperationResult<RT>) {
+    //    loop {
+    //        self.poll_bg_work();
+    //        for (i, &qt) in qts.iter().enumerate() {
+    //            let handle = self.rt.scheduler().from_raw_handle(qt).unwrap();
+    //            if handle.has_completed() {
+    //                let (qd, r) = self.take_operation(handle);
+    //                return (i, qd, r);
+    //            }
+    //            handle.into_raw();
+    //        }
+    //    }
+    //}
+
+    pub fn wait_any2(&mut self, qts: &[QToken]) -> (usize, FileDescriptor,
+OperationResult<RT>) {
         loop {
-            self.poll_bg_work();
-            for (i, &qt) in qts.iter().enumerate() {
-                let handle = self.rt.scheduler().from_raw_handle(qt).unwrap();
-                if handle.has_completed() {
-                    let (qd, r) = self.take_operation(handle);
-                    return (i, qd, r);
-                }
-                handle.into_raw();
+            let _foundwork = self.poll_bg_work();
+            if _foundwork == true {
+            	for (i, &qt) in qts.iter().enumerate() {
+            	    let handle = self.rt.scheduler().from_raw_handle(qt).unwrap();
+            	    if handle.has_completed() {
+            	        let (qd, r) = self.take_operation(handle);
+            	        return (i, qd, r);
+            	    }
+            	    handle.into_raw();
+            	}
             }
         }
     }
@@ -212,14 +229,16 @@ impl<RT: Runtime> LibOS<RT> {
         }
     }
 
-    fn poll_bg_work(&mut self) {
-        let _s = static_span!();
+    fn poll_bg_work(&mut self) -> bool {
+        //let _s = static_span!();
         self.rt.scheduler().poll();
+        let mut _foundwork = false;
         for _ in 0..MAX_RECV_ITERS {
             let batch = self.rt.receive();
             if batch.is_empty() {
                 break;
             }
+            _foundwork = true;
             for pkt in batch {
                 if let Err(e) = self.engine.receive(pkt) {
                     warn!("Dropped packet: {:?}", e);
@@ -227,9 +246,43 @@ impl<RT: Runtime> LibOS<RT> {
             }
         }
         if self.ts_iters == 0 {
-            let _t = static_span!("advance_clock");
+            //let _t = static_span!(advance_clock);
             self.rt.advance_clock(Instant::now());
         }
         self.ts_iters = (self.ts_iters + 1) % TIMER_RESOLUTION;
+        _foundwork
     }
+
+    //pub fn is_qd_valid(&self, fd: FileDescriptor) -> bool {
+    //    self.engine.is_qd_valid(fd)
+    //}
+
+    //fn take_operation(&mut self, handle: SchedulerHandle) -> (FileDescriptor, OperationResult<RT>) {
+    //    match self.rt.scheduler().take(handle) {
+    //        Operation::Tcp(f) => f.expect_result(),
+    //        Operation::Udp(f) => f.expect_result(),
+    //        Operation::Background(..) => panic!("Polled background operation"),
+    //    }
+    //}
+
+    //fn poll_bg_work(&mut self) {
+    //    //let _s = static_span!();
+    //    self.rt.scheduler().poll();
+    //    for _ in 0..MAX_RECV_ITERS {
+    //        let batch = self.rt.receive();
+    //        if batch.is_empty() {
+    //            break;
+    //        }
+    //        for pkt in batch {
+    //            if let Err(e) = self.engine.receive(pkt) {
+    //                warn!("Dropped packet: {:?}", e);
+    //            }
+    //        }
+    //    }
+    //    if self.ts_iters == 0 {
+    //        //let _t = static_span!("advance_clock");
+    //        self.rt.advance_clock(Instant::now());
+    //    }
+    //    self.ts_iters = (self.ts_iters + 1) % TIMER_RESOLUTION;
+    //}
 }

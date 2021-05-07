@@ -9,6 +9,8 @@ use dpdk_rs::{
     rte_eth_rx_burst,
     rte_pktmbuf_chain,
 };
+//use spin_sleep::SpinSleeper;
+use crate::dpdk::print_dpdk_device_stats;
 use crate::memory::{MemoryManager, DPDKBuf, Mbuf};
 use arrayvec::ArrayVec;
 use catnip::{
@@ -98,6 +100,7 @@ impl DPDKRuntime {
         let mut rng = rand::thread_rng();
         let rng = SmallRng::from_rng(&mut rng).expect("Failed to initialize RNG");
         let now = Instant::now();
+        //let mut packet_count = 0;
 
         let mut arp_options = arp::Options::default();
         arp_options.initial_values = arp_table;
@@ -125,6 +128,7 @@ impl DPDKRuntime {
 
             dpdk_port_id,
             memory_manager,
+            //packet_count,
         };
         Self {
             inner: Rc::new(RefCell::new(inner)),
@@ -156,6 +160,7 @@ struct Inner {
     udp_options: udp::Options,
 
     dpdk_port_id: u16,
+    //packet_count: u64,
 }
 
 impl Runtime for DPDKRuntime {
@@ -191,7 +196,8 @@ impl Runtime for DPDKRuntime {
         // Chain body buffer.
 
         // First, allocate a header mbuf and write the header into it.
-        let inner = self.inner.borrow_mut();
+        let mut inner = self.inner.borrow_mut();
+        //let mut packet_count = inner.packet_count;
         let mut header_mbuf = inner.memory_manager.alloc_header_mbuf();
         let header_size = buf.header_size();
         assert!(header_size <= header_mbuf.len());
@@ -271,6 +277,12 @@ impl Runtime for DPDKRuntime {
             };
             assert_eq!(num_sent, 1);
         }
+        //packet_count += 1;
+        //if (packet_count == 100000) {
+        //    //print_dpdk_device_stats(0);
+        //    packet_count = 0;
+        //}
+        //inner.packet_count = packet_count;
     }
 
     fn receive(&self) -> ArrayVec<[DPDKBuf; RECEIVE_BATCH_SIZE]> {
@@ -278,6 +290,7 @@ impl Runtime for DPDKRuntime {
         let mut out = ArrayVec::new();
 
         let mut packets: [*mut rte_mbuf; RECEIVE_BATCH_SIZE] = unsafe { mem::zeroed() };
+        
         let nb_rx = unsafe {
             rte_eth_rx_burst(
                 inner.dpdk_port_id,
@@ -287,12 +300,18 @@ impl Runtime for DPDKRuntime {
             )
         };
         assert!(nb_rx as usize <= RECEIVE_BATCH_SIZE);
+        //if (nb_rx == 0) {
+        //    println!("zero");
+        //    //let spin_sleeper = SpinSleeper::default();
+        //    spin_sleeper.sleep_ns(0_000_000_020);
+        //}
 
         for &packet in &packets[..nb_rx as usize] {
             let mbuf = Mbuf {
                 ptr: packet,
                 mm: inner.memory_manager.clone(),
             };
+            //println!("recv mbuf addr: {:?}", &mbuf);
             out.push(DPDKBuf::Managed(mbuf));
         }
         out

@@ -4,15 +4,16 @@
 cmake_minimum_required (VERSION 3.5.1)
 project (Zeus C CXX)
 
+set(CMAKE_VERBOSE_MAKEFILE ON)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/scripts/cmake")
 
 include(dpdk)
 include(hoard)
-include(mimalloc)
-include(PcapPlusPlus)
-include(redis)
-include(tapir)
-include(spdk)
+#include(mimalloc)
+#include(PcapPlusPlus)
+#include(redis)
+#include(tapir)
+#include(spdk)
 
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)

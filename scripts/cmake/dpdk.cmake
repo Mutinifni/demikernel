@@ -15,6 +15,8 @@ set(DPDK_SOURCE_DIR ${CMAKE_SOURCE_DIR}/submodules/dpdk)
 
 set(DPDK_BUILD_DIR ${CMAKE_BINARY_DIR}/ExternalProject/dpdk-build)
 
+#$(info "$$DPDK_BUILD_DIR is" [${DPDK_BUILD_DIR}])
+
 set(DPDK_INSTALL_DIR ${CMAKE_BINARY_DIR}/ExternalProject/dpdk)
 set(DPDK_INCLUDE_DIR ${DPDK_INSTALL_DIR}/include)
 set(DPDK_LIB_DIR ${DPDK_INSTALL_DIR}/lib)

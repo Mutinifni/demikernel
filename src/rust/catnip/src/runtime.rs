@@ -30,7 +30,8 @@ use std::{
     ops::Deref,
 };
 
-pub const RECEIVE_BATCH_SIZE: usize = 4;
+//pub const RECEIVE_BATCH_SIZE: usize = 4;
+pub const RECEIVE_BATCH_SIZE: usize = 16;
 
 pub trait RuntimeBuf: Clone + Debug + Deref<Target=[u8]> + Sized + Unpin {
     fn empty() -> Self;

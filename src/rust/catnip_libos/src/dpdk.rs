@@ -27,6 +27,8 @@ use dpdk_rs::{
         rte_mbuf,
         rte_mempool,
         rte_pktmbuf_pool_create,
+        rte_eth_stats,
+        rte_eth_stats_get,
         rte_socket_id,
         DEV_TX_OFFLOAD_MULTI_SEGS,
         DEV_RX_OFFLOAD_JUMBO_FRAME,
@@ -138,6 +140,35 @@ pub fn initialize_dpdk(
     ))
 }
 
+struct PrintOnDrop {
+    port_id: u16,
+}
+
+impl Drop for PrintOnDrop {
+    fn drop(&mut self) {
+    //    print_dpdk_device_stats(0);
+    }
+}
+
+pub fn print_dpdk_device_stats(
+    port_id: u16
+) -> Result<(), Error> {
+    let mut stats: rte_eth_stats = unsafe { MaybeUninit::zeroed().assume_init() };
+    unsafe {
+        expect_zero!(rte_eth_stats_get(port_id, &mut stats as *mut _))?;
+    }
+    println!("eth stats for port {}", port_id);
+    println!(
+        "[port {}], RX-packets: {} RX-dropped: {} RX-bytes: {}\n",
+        port_id, stats.ipackets, stats.imissed, stats.ibytes
+    );
+    println!("[port {}] TX-packets: {} TX-bytes: {}\n",
+            port_id, stats.opackets, stats.obytes);
+    println!("RX-error: {} TX-error: {} RX-mbuf-fail: {}\n",
+            stats.ierrors, stats.oerrors, stats.rx_nombuf);
+    Ok(())
+}
+
 fn initialize_dpdk_port(
     port_id: u16,
     memory_manager: &MemoryManager,
@@ -150,6 +181,8 @@ fn initialize_dpdk_port(
     let tx_rings = 1;
     let rx_ring_size = 128;
     let tx_ring_size = 512;
+    //let rx_ring_size = 512;
+    //let tx_ring_size = 1024;
     let nb_rxd = rx_ring_size;
     let nb_txd = tx_ring_size;
 

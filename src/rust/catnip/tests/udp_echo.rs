@@ -72,7 +72,7 @@ use std::{
         Instant,
     },
 };
-use tracy_client::static_span;
+//use tracy_client::static_span;
 
 #[derive(Clone)]
 pub struct TestRuntime {
@@ -191,7 +191,7 @@ impl Runtime for TestRuntime {
     }
 
     fn transmit(&self, pkt: impl PacketBuf<Bytes>) {
-        let _s = static_span!();
+        //let _s = static_span!();
         let header_size = pkt.header_size();
         let body_size = pkt.body_size();
 
@@ -208,7 +208,7 @@ impl Runtime for TestRuntime {
     }
 
     fn receive(&self) -> ArrayVec<[Bytes; RECEIVE_BATCH_SIZE]> {
-        let _s = static_span!();
+        //let _s = static_span!();
         let mut out = ArrayVec::new();
         if let Some(buf) = self.inner.borrow_mut().incoming.try_recv().ok() {
             out.push(buf);

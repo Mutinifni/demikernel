@@ -30,7 +30,7 @@ use std::{
         Instant,
     },
 };
-use tracy_client::static_span;
+//use tracy_client::static_span;
 
 #[macro_use]
 extern crate log;
@@ -43,7 +43,7 @@ pub fn one_send_recv_round(
     bob: &mut test_helpers::TestEngine,
     bob_fd: FileDescriptor,
 ) {
-    let _s = static_span!("tcp_round");
+    //let _s = static_span!("tcp_round");
 
     // Send data from Alice to Bob
     debug!("Sending from Alice to Bob");
